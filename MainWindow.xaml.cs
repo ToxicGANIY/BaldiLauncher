@@ -28,33 +28,64 @@ public class GameSave
 // Описание версии для списка игр: название + своё описание
 public record Ver(string Label, string Description = "");
 
-// ---------- загрузка картинок из Assets ----------
+// ---------- загрузка картинок ----------
+// Порядок: 1) файл в папке Assets рядом с exe (можно подменить своей картинкой),
+//          2) картинка, встроенная в сам exe (папка Assets проекта, Build Action = Resource)
 static class Images
 {
     static readonly Dictionary<string, BitmapImage?> cache = new();
+    static readonly string[] Exts = { ".png", ".jpg", ".jpeg" };
 
     public static BitmapImage? Load(string slug)
     {
         if (cache.TryGetValue(slug, out var cached)) return cached;
+        var img = FromDisk(slug) ?? FromResource(slug);
+        cache[slug] = img;
+        return img;
+    }
 
-        BitmapImage? img = null;
-        foreach (var ext in new[] { ".png", ".jpg", ".jpeg" })
+    static BitmapImage? FromDisk(string slug)
+    {
+        foreach (var ext in Exts)
         {
             var p = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", slug + ext);
             if (!File.Exists(p)) continue;
             try
             {
-                img = new BitmapImage();
+                var img = new BitmapImage();
                 img.BeginInit();
                 img.CacheOption = BitmapCacheOption.OnLoad;
                 img.UriSource = new Uri(p);
                 img.EndInit();
+                img.Freeze();
+                return img;
             }
-            catch { img = null; }
-            break;
+            catch { }
         }
-        cache[slug] = img;
-        return img;
+        return null;
+    }
+
+    static BitmapImage? FromResource(string slug)
+    {
+        foreach (var ext in Exts)
+        {
+            try
+            {
+                var uri = new Uri($"pack://application:,,,/Assets/{slug}{ext}", UriKind.Absolute);
+                var info = Application.GetResourceStream(uri);   // бросает исключение, если ресурса нет
+                if (info == null) continue;
+                using var stream = info.Stream;
+                var img = new BitmapImage();
+                img.BeginInit();
+                img.CacheOption = BitmapCacheOption.OnLoad;
+                img.StreamSource = stream;
+                img.EndInit();
+                img.Freeze();
+                return img;
+            }
+            catch { }
+        }
+        return null;
     }
 }
 
@@ -222,40 +253,40 @@ public partial class MainWindow : Window
             wiki: "Baldi's Basics Classic"),
 
         new("Baldi's Basics Classic Remastered", Main, "classic",
-            "Ремастер вышел 21 октября 2022 года и объединяет оригинальную игру, Birthday Bash и режим Demo, который смешивает черты оригинала и Plus. В нём есть удобства из Plus, например Baldicator и переработанная шкала выносливости.",
+            "Обновлённая версия классической Baldi's Basics.",
             steamKey: "baldisbasicsclassic",
             wiki: "Baldi's Basics Classic Remastered"),
 
         new("Baldi's Basics Plus", Main, "plus",
-            "Стелс-рогалик с пародией на дешёвые образовательные игры 90-х: процедурно генерируемые уровни, случайные события, экскурсии и режимы (основной, бесконечный, испытания, экскурсии). Вышла в раннем доступе 12 июня 2020 года.",
+            "Стелс-рогалик в духе «Балди»: прячься от учителя на процедурно генерируемых уровнях.",
             steamKey: "baldisbasicsplus",
             wiki: "Baldi's Basics Plus"),
 
         new("Baldi's Basics Birthday Bash", Main, "birthday",
-            "Праздничная версия к годовщине игры. В ней два этажа: первый повторяет схему оригинала, а второй это «глючная» школа.",
+            "Праздничная версия Baldi's Basics. Укажи путь к .exe, чтобы запускать её отсюда.",
             wiki: "Baldi's Basics Birthday Bash"),
 
         new("Challenges Demo", Demos, "challenges",
-            "Вторая публичная демо-версия Plus к двухлетию серии. В ней три карты-испытания и новый режим испытаний, который потом попал в полную игру. Это единственное демо без версий для macOS и Linux",
+            "Baldi's Basics — Challenges Demo. Укажи путь к .exe нужной версии.",
             versions: new Ver[] { new("1.0", ""), new("1.1", "") },
             wiki: "Baldi's Basics - Challenges Demo"),
 
         new("Kickstarter Exclusive Demo", Demos, "kickstarter",
-            "Закрытое демо для спонсоров Kickstarter, пожертвовавших от 30 долларов. Контента в нём заметно больше, чем в публичной демо",
+            "Эксклюзивная демо-версия Baldi's Basics для участников Kickstarter.",
             wiki: "Baldi's Basics Kickstarter Exclusive Demo"),
 
         new("Full Game Public Demo", Demos, "publicdemo",
-            "Бесплатное демо, показывающее случайные события и особые структуры из будущей полной игры. Его убрали после выхода версии 0.3 Plus как устаревшее",
+            "Публичная демо-версия полной игры Baldi's Basics.",
             wiki: "Baldi's Basics Full Game Public Demo"),
 
         new("Field Trip Demo: Camping", Demos, "camping",
-            "Экскурсия в поход с Балди: нужно три минуты не давать костру погаснуть. Побочные задания дают предметы и постоянные усиления.",
+            "Baldi's Basics — Field Trip demo: Camping. Укажи путь к .exe нужной версии.",
             versions: new Ver[] { new("1.0", ""), new("1.1", "") },
             wiki: "Baldi's Basics - Field Trip demo: Camping"),
 
         // wiki не указана — кнопка «Вики» откроет поиск по названию игры
         new("Baldi's Basics Plus Development Build", Demos, "plusdev",
-            "Ранняя девелоперская сборка, в роликах которой впервые показали команду карты. Заметь, на вики она называется «Baldi’s Basics in Education and Learning: Development Build», то есть, возможно, это сборка оригинала, а не Plus. Если название в лаунчере неточное, стоит его поправить."),
+            "Девелоперская сборка Baldi's Basics Plus."),
     };
 
     public MainWindow()
@@ -287,16 +318,19 @@ public partial class MainWindow : Window
     }
 
     // ---------- иконка окна: Assets/icon.ico|png (если нет — берётся logo) ----------
+    // сначала файл рядом с exe, потом встроенный ресурс
     void LoadIcon()
     {
         foreach (var name in new[] { "icon", "logo" })
             foreach (var ext in new[] { ".ico", ".png", ".jpg", ".jpeg" })
             {
-                var p = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", name + ext);
-                if (!File.Exists(p)) continue;
+                var disk = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", name + ext);
                 try
                 {
-                    Icon = BitmapFrame.Create(new Uri(p));
+                    var uri = File.Exists(disk)
+                        ? new Uri(disk)
+                        : new Uri($"pack://application:,,,/Assets/{name}{ext}", UriKind.Absolute);
+                    Icon = BitmapFrame.Create(uri);
                     return;
                 }
                 catch { }
