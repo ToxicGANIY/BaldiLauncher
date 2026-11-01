@@ -10,10 +10,10 @@
 - Кнопки «Открыть папку» и «Вики»
 - Настройки сохраняются в `config.json` рядом с лаунчером
 
-Установка
-1. Скачай архив из раздела [Releases](../../releases).
-2. Распакуй и запусти `BaldiLauncher.exe`.
-3. Нужен [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0).
+**Установка**
+1. Скачай `BaldiLauncher.exe`.
+2. Установи [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) иначе всё сдохнет и твой пк взорвётся.
+3. Запусти эту срань. Настройки сохранятся в `config.json` рядом с exe.
 
 Сборка из исходников
 Visual Studio 2022 с .NET 8 или командой:
