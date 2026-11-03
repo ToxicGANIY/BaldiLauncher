@@ -4,7 +4,9 @@ using System.IO;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
@@ -100,6 +102,7 @@ public class VersionEntry : INotifyPropertyChanged
     public string Description { get; }
     public string Key => Label == "" ? "default" : Label;
     public bool FromSteam { get; set; }
+    public string? SteamAppId { get; set; }   // для запуска через Steam
 
     public VersionEntry(string gameSlug, Ver v)
     {
@@ -214,8 +217,9 @@ public class GameEntry : INotifyPropertyChanged
 
 public partial class MainWindow : Window
 {
-    // Конфиг лежит рядом с exe: config.json
-    static readonly string SaveFile = System.IO.Path.Combine(AppContext.BaseDirectory, "config.json");
+    // Конфиг лежит рядом с exe: baldiconfig.json
+    static readonly string SaveFile = System.IO.Path.Combine(AppContext.BaseDirectory, "baldiconfig.json");
+    static readonly string OldSaveFile = System.IO.Path.Combine(AppContext.BaseDirectory, "config.json");   // старое имя, подхватывается один раз
 
     static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -342,8 +346,9 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (!File.Exists(SaveFile)) return;
-            var dict = JsonSerializer.Deserialize<Dictionary<string, GameSave>>(File.ReadAllText(SaveFile));
+            var file = File.Exists(SaveFile) ? SaveFile : OldSaveFile;   // если нового файла ещё нет — читаем старый config.json
+            if (!File.Exists(file)) return;
+            var dict = JsonSerializer.Deserialize<Dictionary<string, GameSave>>(File.ReadAllText(file));
             if (dict == null) return;
 
             foreach (var g in games)
@@ -425,8 +430,12 @@ public partial class MainWindow : Window
                         .StartsWith("UnityCrashHandler", StringComparison.OrdinalIgnoreCase));
                 if (exe == null) continue;
 
+                var appId = Regex.Match(text, "\"appid\"\\s+\"(\\d+)\"").Groups[1].Value;
+                if (appId == "") appId = Regex.Match(System.IO.Path.GetFileNameWithoutExtension(acf), "\\d+").Value;
+
                 var v = game.Versions[0];
                 v.FromSteam = true;
+                v.SteamAppId = appId == "" ? null : appId;
                 v.Path = exe;
             }
         }
@@ -482,6 +491,14 @@ public partial class MainWindow : Window
     {
         var v = Current?.SelectedVersion;
         if (v == null || !v.IsInstalled) return;
+
+        // Steam-версии запускаем через сам Steam (облачные сохранения, наложение, учёт времени в Steam)
+        if (v.FromSteam && v.SteamAppId != null)
+        {
+            LaunchViaSteam(v);
+            return;
+        }
+
         try
         {
             var proc = Process.Start(new ProcessStartInfo(v.Path!)
@@ -505,22 +522,200 @@ public partial class MainWindow : Window
         }
     }
 
-    void Add_Click(object sender, RoutedEventArgs e)
+    // Запуск через Steam + подсчёт времени: ждём, пока появится процесс игры, и следим за ним
+    async void LaunchViaSteam(VersionEntry v)
     {
-        var g = Current;
-        if (g == null) return;
-        var v = g.SelectedVersion;
+        try
+        {
+            Process.Start(new ProcessStartInfo($"steam://rungameid/{v.SteamAppId}") { UseShellExecute = true });
 
+            var name = System.IO.Path.GetFileNameWithoutExtension(v.Path!);
+            Process? game = null;
+            for (var i = 0; i < 90 && game == null; i++)      // ждём до 90 секунд
+            {
+                await Task.Delay(1000);
+                game = Process.GetProcessesByName(name).FirstOrDefault();
+            }
+            if (game == null) return;
+
+            var started = DateTime.Now;
+            await game.WaitForExitAsync();
+            v.Seconds += (long)(DateTime.Now - started).TotalSeconds;
+            Save();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "Не удалось запустить через Steam");
+        }
+    }
+
+    // Выбор .exe для версии (свой путь — игра запускается напрямую, не через Steam)
+    void PickExe(GameEntry g, VersionEntry v)
+    {
         var dlg = new OpenFileDialog
         {
-            Title = $"Выбери .exe для: {g.FullTitle}",
+            Title = $"Выбери .exe для: {g.Name} {v.Label}".Trim(),
             Filter = "Игра (*.exe)|*.exe"
         };
         if (dlg.ShowDialog() != true) return;
 
         v.FromSteam = false;
+        v.SteamAppId = null;
         v.Path = dlg.FileName;
         Save();
+    }
+
+    void Add_Click(object sender, RoutedEventArgs e)
+    {
+        var g = Current;
+        if (g == null) return;
+        PickExe(g, g.SelectedVersion);
+    }
+
+    // ---------- окно настроек (клик по названию игры) ----------
+    static SolidColorBrush Hex(string c) => (SolidColorBrush)new BrushConverter().ConvertFromString(c)!;
+
+    void Logo_Click(object sender, System.Windows.Input.MouseButtonEventArgs e) => OpenSettings();
+
+    void OpenSettings()
+    {
+        var win = new Window
+        {
+            Title = "Настройки Baldi Launcher",
+            Width = 740,
+            SizeToContent = SizeToContent.Height,
+            MaxHeight = 660,
+            Owner = this,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            ResizeMode = ResizeMode.NoResize,
+            Background = Hex("#161616"),
+            Icon = Icon
+        };
+
+        var root = new StackPanel { Margin = new Thickness(22) };
+        root.Children.Add(new TextBlock
+        {
+            Text = "Настройки", Foreground = Brushes.White, FontSize = 20,
+            FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 4)
+        });
+        root.Children.Add(new TextBlock
+        {
+            Text = "Пути к играм. Steam-версии запускаются через Steam; если выбрать свой .exe, игра будет запускаться напрямую.",
+            Foreground = Hex("#9CA3AF"), FontSize = 12, TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 16)
+        });
+
+        var list = new StackPanel();
+        root.Children.Add(new ScrollViewer
+        {
+            Content = list, MaxHeight = 440, VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+        });
+
+        Button MakeButton(string text, string color, double width) => new()
+        {
+            Content = text, Width = width, Height = 34, FontSize = 13, FontWeight = FontWeights.SemiBold,
+            Background = Hex(color), Style = (Style)FindResource("Btn")
+        };
+
+        Grid MakeRow(GameEntry g, VersionEntry v)
+        {
+            var row = new Grid { Margin = new Thickness(g.HasVersions ? 14 : 0, 0, 0, 12) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            info.Children.Add(new TextBlock
+            {
+                Text = g.HasVersions ? $"Версия {v.Label}" : g.Name,
+                Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 14
+            });
+            info.Children.Add(new TextBlock
+            {
+                Text = v.IsInstalled ? (v.FromSteam ? "Steam: " : "") + v.Path : "Не добавлено",
+                Foreground = v.IsInstalled ? Hex("#9CA3AF") : Hex("#EF4444"),
+                FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis,
+                ToolTip = v.Path, Margin = new Thickness(0, 2, 12, 0)
+            });
+            row.Children.Add(info);
+
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+            Grid.SetColumn(buttons, 1);
+
+            var choose = MakeButton("Выбрать .exe…", "#3B82F6", 130);
+            choose.Click += (_, _) => { PickExe(g, v); Rebuild(); };
+            buttons.Children.Add(choose);
+
+            if (v.IsInstalled)
+            {
+                var reset = MakeButton("Сбросить", "#4B5563", 90);
+                reset.Margin = new Thickness(6, 0, 0, 0);
+                reset.Click += (_, _) =>
+                {
+                    v.FromSteam = false;
+                    v.SteamAppId = null;
+                    v.Path = null;
+                    Save();
+                    ScanSteam();     // Steam-версии найдутся заново
+                    Rebuild();
+                };
+                buttons.Children.Add(reset);
+            }
+
+            row.Children.Add(buttons);
+            return row;
+        }
+
+        void Rebuild()
+        {
+            list.Children.Clear();
+            string? lastGroup = null;
+            foreach (var g in games)
+            {
+                if (g.Group != lastGroup)
+                {
+                    lastGroup = g.Group;
+                    list.Children.Add(new TextBlock
+                    {
+                        Text = g.Group, Foreground = Hex("#B0B0B0"), FontWeight = FontWeights.Bold, FontSize = 13,
+                        Margin = new Thickness(0, list.Children.Count == 0 ? 0 : 10, 0, 8)
+                    });
+                }
+                if (g.HasVersions)
+                    list.Children.Add(new TextBlock
+                    {
+                        Text = g.Name, Foreground = Brushes.White, FontWeight = FontWeights.Bold,
+                        FontSize = 14, Margin = new Thickness(0, 0, 0, 6)
+                    });
+                foreach (var v in g.Versions)
+                    list.Children.Add(MakeRow(g, v));
+            }
+        }
+        Rebuild();
+
+        var footer = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };
+
+        var steam = MakeButton("Найти в Steam", "#2A2A2A", 130);
+        steam.Click += (_, _) => { ScanSteam(); Rebuild(); };
+
+        var cfg = MakeButton("Показать baldiconfig.json", "#2A2A2A", 200);
+        cfg.Margin = new Thickness(8, 0, 0, 0);
+        cfg.Click += (_, _) =>
+        {
+            if (File.Exists(SaveFile)) Process.Start("explorer.exe", $"/select,\"{SaveFile}\"");
+            else Process.Start("explorer.exe", $"\"{AppContext.BaseDirectory}\"");
+        };
+
+        var close = MakeButton("Закрыть", "#4B5563", 100);
+        close.Margin = new Thickness(8, 0, 0, 0);
+        close.Click += (_, _) => win.Close();
+
+        footer.Children.Add(steam);
+        footer.Children.Add(cfg);
+        footer.Children.Add(close);
+        root.Children.Add(footer);
+
+        win.Content = root;
+        win.ShowDialog();
     }
 
     void Folder_Click(object sender, RoutedEventArgs e)
