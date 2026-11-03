@@ -13,7 +13,7 @@
 **Установка**
 1. Скачай `BaldiLauncher.exe`.
 2. Установи [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) иначе всё сдохнет и твой пк взорвётся.
-3. Запусти эту срань. Настройки сохранятся в `config.json` рядом с exe.
+3. Запусти эту срань. Настройки сохранятся в `baldiconfig.json` рядом с exe.
 
 Сборка из исходников
 Visual Studio 2022 с .NET 8 или командой:
